@@ -892,4 +892,117 @@ async def get_user_profile(username: str) -> UserProfile:
             basic_info_task = asyncio.create_task(extract_user_profile_info(page))
             stats_task = asyncio.create_task(extract_user_stats(page))
             distribution_task = asyncio.create_task(extract_rating_distribution(page))
-            reviews
+            reviews_task = asyncio.create_task(extract_user_reviews(page))
+            favorites_task = asyncio.create_task(extract_favorite_albums(page))
+            socials_task = asyncio.create_task(extract_social_links(page))
+            
+            # Wait for all tasks to complete
+            about_text, location_text, member_since = await basic_info_task
+            stats = await stats_task
+            rating_distribution = await distribution_task
+            reviews = await reviews_task
+            favorites = await favorites_task
+            social_links = await socials_task
+            
+            return UserProfile(
+                username=username,
+                location=location_text,
+                about=about_text,
+                member_since=member_since,
+                stats=stats,
+                rating_distribution=rating_distribution,
+                favorite_albums=favorites,
+                recent_reviews=reviews,
+                social_links=social_links,
+            )
+        finally:
+            await page.close()
+            
+    except PlaywrightTimeoutError:
+        raise HTTPException(status_code=503, detail="Timeout accessing user profile")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=503, detail=f"Error accessing user profile: {str(e)}"
+        )
+
+
+async def extract_favorite_albums(page: Page) -> List[Dict[str, str]]:
+    """Extract favorite albums using Playwright"""
+    favorites = []
+    
+    try:
+        album_blocks = await page.query_selector_all("#favAlbumsBlock .albumBlock")
+        
+        for block in album_blocks:
+            try:
+                # Extract album title and artist
+                title_elem = await block.query_selector(".albumTitle")
+                artist_elem = await block.query_selector(".artistTitle")
+                
+                if title_elem and artist_elem:
+                    title = await title_elem.text_content()
+                    artist = await artist_elem.text_content()
+                    
+                    # Extract cover image if available
+                    cover_image = None
+                    img_elem = await block.query_selector(".image img")
+                    if img_elem:
+                        cover_image = await img_elem.get_attribute("src")
+                    
+                    # Extract album URL
+                    url = None
+                    link_elem = await block.query_selector(".image a")
+                    if link_elem:
+                        href = await link_elem.get_attribute("href")
+                        url = f"{BASE_URL}{href}" if href else None
+                    
+                    favorites.append({
+                        "title": title.strip(),
+                        "artist": artist.strip(),
+                        "cover_image": cover_image,
+                        "url": url
+                    })
+            except Exception as e:
+                print(f"Error extracting favorite album: {str(e)}")
+                continue
+    except Exception as e:
+        print(f"Error extracting favorite albums: {str(e)}")
+    
+    return favorites
+
+
+async def extract_social_links(page: Page) -> Dict[str, str]:
+    """Extract social media links using Playwright"""
+    socials = {}
+    
+    try:
+        link_elements = await page.query_selector_all(".profileLink")
+        
+        for link_elem in link_elements:
+            try:
+                # Extract platform from icon
+                icon_elem = await link_elem.query_selector(".logo i")
+                url_elem = await link_elem.query_selector("a")
+                
+                if icon_elem and url_elem:
+                    class_attr = await icon_elem.get_attribute("class")
+                    href = await url_elem.get_attribute("href")
+                    
+                    if class_attr and href:
+                        # Extract platform name from class (e.g., "fa fa-twitter" -> "twitter")
+                        classes = class_attr.split()
+                        for cls in classes:
+                            if cls.startswith("fa-") and cls != "fa-fw":
+                                platform = cls.replace("fa-", "")
+                                socials[platform] = href
+                                break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"Error extracting social links: {str(e)}")
+    
+    return socials
+
+
