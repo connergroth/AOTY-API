@@ -139,15 +139,3 @@ Deploy to Fly.io:
 fly launch
 fly deploy
 ```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Disclaimer
-
-This API is not affiliated with albumoftheyear.org. It's an unofficial API meant for educational purposes and personal use.
