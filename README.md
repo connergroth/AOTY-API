@@ -1,3 +1,5 @@
+<img src="https://github.com/user-attachments/assets/f79b8516-0c8d-4860-b417-75d8448249e7" alt="AOTY API Logo" width="130"/>
+
 # AOTY API
 
 An optimized, unofficial API for albumoftheyear.org that provides access to album information, user profiles, and more.
