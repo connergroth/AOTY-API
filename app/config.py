@@ -30,7 +30,6 @@ REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN")
 # Check if Redis environment variables are set
 if not REDIS_URL or not REDIS_TOKEN:
     print("⚠️ Warning: Redis configuration missing. Cache will be disabled.")
-    # You could set up a fallback cache mechanism here
 
 # Playwright configuration
 PLAYWRIGHT_HEADLESS = True
