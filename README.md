@@ -4,6 +4,8 @@
 
 An optimized, unofficial API for albumoftheyear.org that provides access to album information, user profiles, and more.
 
+---
+
 ## Features
 
 - 🎵 **Album Information**: Get detailed album data including tracks, reviews, and ratings
@@ -13,6 +15,8 @@ An optimized, unofficial API for albumoftheyear.org that provides access to albu
 - ⚡ **Performance**: Optimized caching with Redis for faster responses
 - 🛡️ **Reliability**: Anti-bot detection with Playwright
 - 📊 **Metrics**: Built-in API usage monitoring
+
+---
 
 ## Installation
 
@@ -51,6 +55,8 @@ UPSTASH_REDIS_REST_URL=your_redis_url
 UPSTASH_REDIS_REST_TOKEN=your_redis_token
 ```
 
+---
+
 ## Usage
 
 Start the development server:
@@ -60,6 +66,8 @@ uvicorn app.main:app --reload
 ```
 
 The API will be available at `http://localhost:8000`. You can access the interactive API documentation at `http://localhost:8000/docs`.
+
+---
 
 ## API Endpoints
 
@@ -103,6 +111,8 @@ GET /metrics
 
 Returns current API usage statistics.
 
+---
+
 ## Caching
 
 The API uses Redis for caching with the following TTLs:
@@ -114,11 +124,15 @@ The API uses Redis for caching with the following TTLs:
 
 You can force a refresh of cached data by adding `refresh=true` to your request.
 
+---
+
 ## Rate Limiting
 
 To ensure API stability, the following rate limits apply:
 
 - 30 requests per minute per IP address
+
+---
 
 ## Deployment
 
