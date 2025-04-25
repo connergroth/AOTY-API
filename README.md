@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/238c91cb-9eeb-4479-8e03-f47830115c84" alt="AOTY API" width="350"/>
+  <img src="https://github.com/user-attachments/assets/1f951816-6082-496f-9d48-f4fdef14c036" alt="AOTY API" width="350"/>
 </p>
 
 # AOTY API
