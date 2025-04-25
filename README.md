@@ -1,4 +1,7 @@
-<img src="https://github.com/user-attachments/assets/f79b8516-0c8d-4860-b417-75d8448249e7" alt="AOTY API Logo" width="130"/>
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/238c91cb-9eeb-4479-8e03-f47830115c84" alt="AOTY API" width="350"/>
+</p>
 
 # AOTY API
 
