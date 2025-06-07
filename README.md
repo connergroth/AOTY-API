@@ -1,8 +1,12 @@
-<img src="https://github.com/user-attachments/assets/f79b8516-0c8d-4860-b417-75d8448249e7" alt="AOTY API Logo" width="130"/>
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/88642ed4-c16e-449e-8013-413268cf3e16" alt="AOTY API" width="350"/>
+</p>  
 
 # AOTY API
 
 An optimized, unofficial API for albumoftheyear.org that provides access to album information, user profiles, and more.
+
+---
 
 ## Features
 
@@ -13,6 +17,8 @@ An optimized, unofficial API for albumoftheyear.org that provides access to albu
 - ⚡ **Performance**: Optimized caching with Redis for faster responses
 - 🛡️ **Reliability**: Anti-bot detection with Playwright
 - 📊 **Metrics**: Built-in API usage monitoring
+
+---
 
 ## Installation
 
@@ -51,6 +57,8 @@ UPSTASH_REDIS_REST_URL=your_redis_url
 UPSTASH_REDIS_REST_TOKEN=your_redis_token
 ```
 
+---
+
 ## Usage
 
 Start the development server:
@@ -60,6 +68,8 @@ uvicorn app.main:app --reload
 ```
 
 The API will be available at `http://localhost:8000`. You can access the interactive API documentation at `http://localhost:8000/docs`.
+
+---
 
 ## API Endpoints
 
@@ -103,6 +113,8 @@ GET /metrics
 
 Returns current API usage statistics.
 
+---
+
 ## Caching
 
 The API uses Redis for caching with the following TTLs:
@@ -114,11 +126,15 @@ The API uses Redis for caching with the following TTLs:
 
 You can force a refresh of cached data by adding `refresh=true` to your request.
 
+---
+
 ## Rate Limiting
 
 To ensure API stability, the following rate limits apply:
 
 - 30 requests per minute per IP address
+
+---
 
 ## Deployment
 
@@ -139,15 +155,3 @@ Deploy to Fly.io:
 fly launch
 fly deploy
 ```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Disclaimer
-
-This API is not affiliated with albumoftheyear.org. It's an unofficial API meant for educational purposes and personal use.
