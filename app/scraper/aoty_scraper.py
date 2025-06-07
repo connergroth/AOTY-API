@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from fastapi import HTTPException
 
 from ..config import BASE_URL, PLAYWRIGHT_HEADLESS, PLAYWRIGHT_TIMEOUT
-from ..models import (
+from ..models.aoty_models import (
     Album, 
     Track, 
     CriticReview, 
@@ -199,21 +199,22 @@ async def parse_tracks(page: Page) -> List[Track]:
                 if featured_elem:
                     featured_artist_elems = await featured_elem.query_selector_all("a")
                     for artist_elem in featured_artist_elems:
-                        artist_text = await artist_elem.text_content()
-                        featured_artists.append(artist_text.strip())
+                        artist_name = await artist_elem.text_content()
+                        if artist_name:
+                            featured_artists.append(artist_name.strip())
                 
-                tracks.append(
-                    Track(
-                        number=number,
-                        title=title.strip(),
-                        length=length.strip(),
-                        rating=rating,
-                        featured_artists=featured_artists,
-                    )
-                )
+                tracks.append(Track(
+                    number=number,
+                    title=title.strip(),
+                    length=length.strip(),
+                    rating=rating,
+                    featured_artists=featured_artists
+                ))
+                
             except Exception as e:
                 print(f"Error parsing track: {str(e)}")
                 continue
+                
     except Exception as e:
         print(f"Error parsing tracks: {str(e)}")
         
@@ -225,7 +226,7 @@ async def parse_critic_reviews(page: Page) -> List[CriticReview]:
     reviews = []
     
     try:
-        # Check if critics tab exists
+        # Check if critics tab exists and click it
         critics_tab = await page.query_selector('a[data-target="#critics"]')
         if critics_tab:
             # Click the critics tab to ensure content is loaded
@@ -259,41 +260,7 @@ async def parse_critic_reviews(page: Page) -> List[CriticReview]:
                 text_elem = await row.query_selector(".albumReviewText")
                 text = await text_elem.text_content() if text_elem else ""
                 
-                reviews_task = asyncio.create_task(extract_user_reviews(page))
-            favorites_task = asyncio.create_task(extract_favorite_albums(page))
-            socials_task = asyncio.create_task(extract_social_links(page))
-            
-            # Wait for all tasks to complete
-            about_text, location_text, member_since = await basic_info_task
-            stats = await stats_task
-            rating_distribution = await distribution_task
-            reviews = await reviews_task
-            favorites = await favorites_task
-            social_links = await socials_task
-            
-            return UserProfile(
-                username=username,
-                location=location_text,
-                about=about_text,
-                member_since=member_since,
-                stats=stats,
-                rating_distribution=rating_distribution,
-                favorite_albums=favorites,
-                recent_reviews=reviews,
-                social_links=social_links,
-            )
-        finally:
-            await page.close()
-            
-    except PlaywrightTimeoutError:
-        raise HTTPException(status_code=503, detail="Timeout accessing user profile")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=503, detail=f"Error accessing user profile: {str(e)}"
-        )
-.append(
+                reviews.append(
                     CriticReview(
                         author=author.strip(),
                         publication=publication.strip(),
@@ -447,15 +414,15 @@ async def scrape_album(url: str, artist: str, title: str) -> Album:
             num_reviews = 0
             review_tabs = await page.query_selector_all(".reviewsContainer .tabButton")
             for tab in review_tabs:
-                tab_text = await tab.text_content()
-                if "Reviews" in tab_text and "(" in tab_text and ")" in tab_text:
-                    try:
-                        num_part = tab_text.split("(")[1].split(")")[0]
-                        num_reviews += parse_number(num_part)
-                    except (IndexError, ValueError):
-                        pass
+                try:
+                    tab_text = await tab.text_content()
+                    if tab_text and "(" in tab_text and ")" in tab_text:
+                        count_str = tab_text.split("(")[1].split(")")[0]
+                        num_reviews += parse_number(count_str)
+                except Exception:
+                    continue
             
-            # Create tasks for extracting different parts of the album
+            # Run extraction tasks concurrently
             metadata_task = asyncio.create_task(extract_album_metadata(page))
             tracks_task = asyncio.create_task(parse_tracks(page))
             critic_reviews_task = asyncio.create_task(parse_critic_reviews(page))
@@ -463,9 +430,11 @@ async def scrape_album(url: str, artist: str, title: str) -> Album:
             buy_links_task = asyncio.create_task(parse_buy_links(page))
             
             # Wait for all tasks to complete
-            metadata, tracks, critic_reviews, user_reviews, buy_links = await asyncio.gather(
-                metadata_task, tracks_task, critic_reviews_task, user_reviews_task, buy_links_task
-            )
+            metadata = await metadata_task
+            tracks = await tracks_task
+            critic_reviews = await critic_reviews_task
+            popular_reviews = await user_reviews_task
+            buy_links = await buy_links_task
             
             return Album(
                 title=title,
@@ -479,15 +448,16 @@ async def scrape_album(url: str, artist: str, title: str) -> Album:
                 metadata=metadata,
                 tracks=tracks,
                 critic_reviews=critic_reviews,
-                popular_reviews=user_reviews,
+                popular_reviews=popular_reviews,
                 buy_links=buy_links,
             )
             
         finally:
             await page.close()
-            
     except PlaywrightTimeoutError:
         raise HTTPException(status_code=503, detail="Timeout scraping album")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=503, detail=f"Error scraping album: {str(e)}"
@@ -495,57 +465,67 @@ async def scrape_album(url: str, artist: str, title: str) -> Album:
 
 
 async def get_similar_albums(url: str, limit: int = 5) -> List[Album]:
-    """Get similar albums using Playwright"""
+    """Get similar albums from an album page"""
     try:
-        if not url.endswith("/"):
-            url += "/"
-        similar_url = f"{url}similar/"
-        
         page = await new_page()
         try:
-            await page.goto(similar_url, timeout=PLAYWRIGHT_TIMEOUT, wait_until="domcontentloaded")
+            await page.goto(url, timeout=PLAYWRIGHT_TIMEOUT, wait_until="domcontentloaded")
             
-            # Wait for album blocks to load
-            await page.wait_for_selector(".albumBlock", timeout=PLAYWRIGHT_TIMEOUT)
-            
-            # Get all album blocks
-            album_blocks = await page.query_selector_all(".albumBlock")
-            
-            # Limit the number of albums to process
-            album_blocks = album_blocks[:limit] if limit > 0 else album_blocks
+            # Wait for similar albums section
+            await page.wait_for_selector(".similarAlbums", timeout=PLAYWRIGHT_TIMEOUT)
             
             similar_albums = []
-            for album_block in album_blocks:
+            similar_blocks = await page.query_selector_all(".similarAlbums .albumBlock")
+            
+            for block in similar_blocks[:limit]:
                 try:
-                    # Extract album link
-                    album_link = await album_block.query_selector(".image a")
+                    # Extract album URL
+                    album_link = await block.query_selector(".image a")
                     if not album_link:
                         continue
                         
                     href = await album_link.get_attribute("href")
                     album_url = f"{BASE_URL}{href}"
                     
-                    # Extract artist and title
-                    artist_elem = await album_block.query_selector(".artistTitle")
-                    title_elem = await album_block.query_selector(".albumTitle")
+                    # Extract artist name
+                    artist_elem = await block.query_selector(".artistTitle")
+                    artist_name = await artist_elem.text_content() if artist_elem else ""
                     
-                    if not artist_elem or not title_elem:
-                        continue
+                    # Extract album title
+                    title_elem = await block.query_selector(".albumTitle")
+                    album_title = await title_elem.text_content() if title_elem else ""
+                    
+                    # Extract cover image
+                    cover_elem = await block.query_selector(".image img")
+                    cover_image = await cover_elem.get_attribute("src") if cover_elem else None
+                    
+                    # Extract score
+                    score = None
+                    score_elem = await block.query_selector(".albumScore")
+                    if score_elem:
+                        score_text = await score_elem.text_content()
+                        try:
+                            score = float(score_text.strip()) if score_text.strip() != "NR" else None
+                        except ValueError:
+                            pass
+                    
+                    if artist_name and album_title:
+                        similar_albums.append(Album(
+                            title=album_title.strip(),
+                            artist=artist_name.strip(),
+                            url=album_url,
+                            cover_image=cover_image,
+                            user_score=score
+                        ))
                         
-                    artist_name = await artist_elem.text_content()
-                    album_title = await title_elem.text_content()
-                    
-                    # Scrape the full album details
-                    album = await scrape_album(album_url, artist_name.strip(), album_title.strip())
-                    similar_albums.append(album)
                 except Exception as e:
-                    print(f"Error processing similar album: {str(e)}")
+                    print(f"Error parsing similar album: {str(e)}")
                     continue
             
             return similar_albums
+            
         finally:
             await page.close()
-            
     except PlaywrightTimeoutError:
         raise HTTPException(status_code=503, detail="Timeout getting similar albums")
     except Exception as e:
@@ -555,11 +535,11 @@ async def get_similar_albums(url: str, limit: int = 5) -> List[Album]:
 
 
 async def search_albums(query: str, limit: int = 10) -> List[SearchResult]:
-    """Search for albums using Playwright"""
+    """Search for albums and return results"""
+    search_query = urllib.parse.quote(query)
+    url = f"{BASE_URL}/search/albums/?q={search_query}"
+
     try:
-        search_query = urllib.parse.quote(query)
-        url = f"{BASE_URL}/search/albums/?q={search_query}"
-        
         page = await new_page()
         try:
             await page.goto(url, timeout=PLAYWRIGHT_TIMEOUT, wait_until="domcontentloaded")
@@ -567,79 +547,69 @@ async def search_albums(query: str, limit: int = 10) -> List[SearchResult]:
             # Wait for search results to load
             await page.wait_for_selector(".albumBlock", timeout=PLAYWRIGHT_TIMEOUT)
             
-            # Get all album blocks
+            results = []
             album_blocks = await page.query_selector_all(".albumBlock")
             
-            # Limit the number of results
-            album_blocks = album_blocks[:limit] if limit > 0 else album_blocks
-            
-            results = []
-            for album_block in album_blocks:
+            for block in album_blocks[:limit]:
                 try:
                     # Extract album URL
-                    album_link = await album_block.query_selector(".image a")
+                    album_link = await block.query_selector(".image a")
                     if not album_link:
                         continue
                         
                     href = await album_link.get_attribute("href")
                     album_url = f"{BASE_URL}{href}"
                     
-                    # Extract artist and title
-                    artist_elem = await album_block.query_selector(".artistTitle")
-                    title_elem = await album_block.query_selector(".albumTitle")
+                    # Extract artist name
+                    artist_elem = await block.query_selector(".artistTitle")
+                    artist_name = await artist_elem.text_content() if artist_elem else ""
                     
-                    if not artist_elem or not title_elem:
-                        continue
-                        
-                    artist = await artist_elem.text_content()
-                    title = await title_elem.text_content()
+                    # Extract album title
+                    title_elem = await block.query_selector(".albumTitle")
+                    album_title = await title_elem.text_content() if title_elem else ""
                     
                     # Extract cover image
-                    cover_image = None
-                    img_elem = await album_block.query_selector(".image img")
-                    if img_elem:
-                        cover_image = await img_elem.get_attribute("src")
+                    cover_elem = await block.query_selector(".image img")
+                    cover_image = await cover_elem.get_attribute("src") if cover_elem else None
                     
                     # Extract year
                     year = None
-                    details_elem = await album_block.query_selector(".details")
-                    if details_elem:
-                        details_text = await details_elem.text_content()
-                        if "•" in details_text:
-                            year_text = details_text.split("•")[0].strip()
-                            try:
-                                year = int(year_text)
-                            except ValueError:
-                                pass
-                    
-                    # Extract score
-                    score = None
-                    score_elem = await album_block.query_selector(".scoreValue")
-                    if score_elem:
-                        score_text = await score_elem.text_content()
+                    year_elem = await block.query_selector(".albumYear")
+                    if year_elem:
+                        year_text = await year_elem.text_content()
                         try:
-                            score = float(score_text.strip())
+                            year = int(year_text.strip()) if year_text.strip().isdigit() else None
                         except ValueError:
                             pass
                     
-                    results.append(
-                        SearchResult(
-                            title=title.strip(),
-                            artist=artist.strip(),
+                    # Extract score
+                    score = None
+                    score_elem = await block.query_selector(".albumScore")
+                    if score_elem:
+                        score_text = await score_elem.text_content()
+                        try:
+                            score = float(score_text.strip()) if score_text.strip() != "NR" else None
+                        except ValueError:
+                            pass
+                    
+                    if artist_name and album_title:
+                        results.append(SearchResult(
+                            title=album_title.strip(),
+                            artist=artist_name.strip(),
                             url=album_url,
                             cover_image=cover_image,
                             year=year,
-                            score=score,
-                        )
-                    )
+                            score=score
+                        ))
+                        
                 except Exception as e:
-                    print(f"Error processing search result: {str(e)}")
+                    print(f"Error parsing search result: {str(e)}")
                     continue
             
             return results
+            
         finally:
             await page.close()
-            
     except PlaywrightTimeoutError:
         raise HTTPException(status_code=503, detail="Timeout searching albums")
     except Exception as e:
@@ -649,233 +619,221 @@ async def search_albums(query: str, limit: int = 10) -> List[SearchResult]:
 
 
 async def extract_user_profile_info(page: Page) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Extract basic user profile information using Playwright"""
-    about = None
-    location = None
-    member_since = None
-    
+    """Extract basic user profile information"""
     try:
         # Extract about text
-        about_elem = await page.query_selector(".aboutUser")
-        if about_elem:
-            about = await about_elem.text_content()
+        about_elem = await page.query_selector(".userAbout")
+        about_text = await about_elem.text_content() if about_elem else None
         
         # Extract location
-        location_elem = await page.query_selector(".profileLocation")
-        if location_elem:
-            location = await location_elem.text_content()
+        location_elem = await page.query_selector(".userLocation")
+        location_text = await location_elem.text_content() if location_elem else None
         
-        # Extract member since
-        info_elements = await page.query_selector_all(".rightBox div")
-        for elem in info_elements:
-            elem_text = await elem.text_content()
-            if elem_text and elem_text.startswith("Member since"):
-                member_since = elem_text.replace("Member since", "").strip()
-                break
+        # Extract member since date
+        member_elem = await page.query_selector(".memberSince")
+        member_since = await member_elem.text_content() if member_elem else None
+        
+        return about_text, location_text, member_since
+        
     except Exception as e:
         print(f"Error extracting user profile info: {str(e)}")
-    
-    return about, location, member_since
+        return None, None, None
 
 
 async def extract_user_stats(page: Page) -> UserStats:
-    """Extract user statistics using Playwright"""
-    stats = UserStats()
-    
+    """Extract user statistics"""
     try:
-        stat_containers = await page.query_selector_all(".profileStatContainer")
-        if len(stat_containers) >= 4:
-            # Extract stats in order: ratings, reviews, lists, followers
-            for idx, key in enumerate(["ratings", "reviews", "lists", "followers"]):
-                if idx < len(stat_containers):
-                    stat_elem = await stat_containers[idx].query_selector(".profileStat")
-                    if stat_elem:
-                        stat_text = await stat_elem.text_content()
-                        try:
-                            setattr(stats, key, parse_number(stat_text.strip()))
-                        except ValueError:
-                            pass
+        stats = UserStats()
+        
+        # Extract ratings count
+        ratings_elem = await page.query_selector(".userStats .ratings strong")
+        if ratings_elem:
+            ratings_text = await ratings_elem.text_content()
+            stats.ratings = parse_number(ratings_text.strip())
+        
+        # Extract reviews count
+        reviews_elem = await page.query_selector(".userStats .reviews strong")
+        if reviews_elem:
+            reviews_text = await reviews_elem.text_content()
+            stats.reviews = parse_number(reviews_text.strip())
+        
+        # Extract lists count
+        lists_elem = await page.query_selector(".userStats .lists strong")
+        if lists_elem:
+            lists_text = await lists_elem.text_content()
+            stats.lists = parse_number(lists_text.strip())
+        
+        # Extract followers count
+        followers_elem = await page.query_selector(".userStats .followers strong")
+        if followers_elem:
+            followers_text = await followers_elem.text_content()
+            stats.followers = parse_number(followers_text.strip())
+        
+        return stats
+        
     except Exception as e:
         print(f"Error extracting user stats: {str(e)}")
-    
-    return stats
+        return UserStats()
 
 
 async def extract_rating_distribution(page: Page) -> Dict[str, int]:
-    """Extract rating distribution using Playwright"""
-    distribution = {}
-    
+    """Extract user's rating distribution"""
     try:
-        dist_rows = await page.query_selector_all(".dist .distRow")
-        for row in dist_rows:
-            label_elem = await row.query_selector(".distLabel")
-            count_elem = await row.query_selector(".distCount")
+        distribution = {}
+        
+        rating_bars = await page.query_selector_all(".ratingDistribution .ratingBar")
+        for bar in rating_bars:
+            rating_elem = await bar.query_selector(".rating")
+            count_elem = await bar.query_selector(".count")
             
-            if label_elem and count_elem:
-                label_text = await label_elem.text_content()
+            if rating_elem and count_elem:
+                rating = await rating_elem.text_content()
                 count_text = await count_elem.text_content()
-                
-                if label_text and count_text:
-                    try:
-                        count = parse_number(count_text.strip())
-                        distribution[label_text.strip()] = count
-                    except ValueError:
-                        pass
+                count = parse_number(count_text.strip())
+                distribution[rating.strip()] = count
+        
+        return distribution
+        
     except Exception as e:
         print(f"Error extracting rating distribution: {str(e)}")
-    
-    return distribution
+        return {}
 
 
 async def extract_user_reviews(page: Page) -> List[ProfileUserReview]:
-    """Extract user reviews from profile page using Playwright"""
-    reviews = []
-    
+    """Extract user's recent reviews"""
     try:
-        review_rows = await page.query_selector_all(".albumReviewRow")
+        reviews = []
         
+        review_rows = await page.query_selector_all(".userReviews .reviewRow")
         for row in review_rows:
             try:
-                # Extract album title and artist
-                album_title_elem = await row.query_selector(".albumTitle")
-                album_artist_elem = await row.query_selector(".artistTitle")
+                # Extract album title
+                title_elem = await row.query_selector(".albumTitle a")
+                album_title = await title_elem.text_content() if title_elem else ""
                 
-                if not album_title_elem or not album_artist_elem:
-                    continue
-                
-                album_title = await album_title_elem.text_content()
-                album_artist = await album_artist_elem.text_content()
+                # Extract artist
+                artist_elem = await row.query_selector(".artistTitle a")
+                album_artist = await artist_elem.text_content() if artist_elem else ""
                 
                 # Extract rating
+                rating = 0
                 rating_elem = await row.query_selector(".rating")
-                if not rating_elem:
-                    continue
-                
-                rating_text = await rating_elem.text_content()
-                try:
-                    rating = int(rating_text.strip())
-                except ValueError:
-                    continue
+                if rating_elem:
+                    rating_text = await rating_elem.text_content()
+                    try:
+                        rating = int(rating_text.strip()) if rating_text.strip().isdigit() else 0
+                    except ValueError:
+                        pass
                 
                 # Extract review text
-                text_elem = await row.query_selector(".albumReviewText")
+                text_elem = await row.query_selector(".reviewText")
                 review_text = await text_elem.text_content() if text_elem else ""
                 
                 # Extract likes
                 likes = 0
-                likes_elem = await row.query_selector(".review_likes")
+                likes_elem = await row.query_selector(".likes")
                 if likes_elem:
                     likes_text = await likes_elem.text_content()
-                    try:
-                        likes = parse_number(likes_text.strip())
-                    except ValueError:
-                        pass
+                    likes = parse_number(likes_text.strip())
                 
                 # Extract timestamp
-                timestamp = ""
-                timestamp_elem = await row.query_selector(".actionContainer[title]")
-                if timestamp_elem:
-                    timestamp = await timestamp_elem.text_content()
+                timestamp_elem = await row.query_selector(".timestamp")
+                timestamp = await timestamp_elem.text_content() if timestamp_elem else ""
                 
-                reviews.append(
-                    ProfileUserReview(
+                if album_title and album_artist:
+                    reviews.append(ProfileUserReview(
                         album_title=album_title.strip(),
                         album_artist=album_artist.strip(),
                         rating=rating,
                         review_text=review_text.strip(),
                         likes=likes,
-                        timestamp=timestamp.strip(),
-                    )
-                )
+                        timestamp=timestamp.strip()
+                    ))
+                    
             except Exception as e:
-                print(f"Error extracting user review: {str(e)}")
+                print(f"Error parsing user review: {str(e)}")
                 continue
+        
+        return reviews
+        
     except Exception as e:
         print(f"Error extracting user reviews: {str(e)}")
-    
-    return reviews
+        return []
 
 
 async def extract_favorite_albums(page: Page) -> List[Dict[str, str]]:
-    """Extract favorite albums using Playwright"""
-    favorites = []
-    
+    """Extract user's favorite albums"""
     try:
-        album_blocks = await page.query_selector_all("#favAlbumsBlock .albumBlock")
+        favorites = []
         
+        album_blocks = await page.query_selector_all(".favoriteAlbums .albumBlock")
         for block in album_blocks:
             try:
-                # Extract album title and artist
-                title_elem = await block.query_selector(".albumTitle")
-                artist_elem = await block.query_selector(".artistTitle")
+                # Extract album URL
+                album_link = await block.query_selector(".image a")
+                if not album_link:
+                    continue
+                    
+                href = await album_link.get_attribute("href")
+                album_url = f"{BASE_URL}{href}"
                 
-                if title_elem and artist_elem:
-                    title = await title_elem.text_content()
-                    artist = await artist_elem.text_content()
-                    
-                    # Extract cover image if available
-                    cover_image = None
-                    img_elem = await block.query_selector(".image img")
-                    if img_elem:
-                        cover_image = await img_elem.get_attribute("src")
-                    
-                    # Extract album URL
-                    url = None
-                    link_elem = await block.query_selector(".image a")
-                    if link_elem:
-                        href = await link_elem.get_attribute("href")
-                        url = f"{BASE_URL}{href}" if href else None
-                    
+                # Extract artist name
+                artist_elem = await block.query_selector(".artistTitle")
+                artist_name = await artist_elem.text_content() if artist_elem else ""
+                
+                # Extract album title
+                title_elem = await block.query_selector(".albumTitle")
+                album_title = await title_elem.text_content() if title_elem else ""
+                
+                # Extract cover image
+                cover_elem = await block.query_selector(".image img")
+                cover_image = await cover_elem.get_attribute("src") if cover_elem else ""
+                
+                if artist_name and album_title:
                     favorites.append({
-                        "title": title.strip(),
-                        "artist": artist.strip(),
-                        "cover_image": cover_image,
-                        "url": url
+                        "title": album_title.strip(),
+                        "artist": artist_name.strip(),
+                        "url": album_url,
+                        "cover_image": cover_image
                     })
+                    
             except Exception as e:
-                print(f"Error extracting favorite album: {str(e)}")
+                print(f"Error parsing favorite album: {str(e)}")
                 continue
+        
+        return favorites
+        
     except Exception as e:
         print(f"Error extracting favorite albums: {str(e)}")
-    
-    return favorites
+        return []
 
 
 async def extract_social_links(page: Page) -> Dict[str, str]:
-    """Extract social media links using Playwright"""
-    socials = {}
-    
+    """Extract user's social media links"""
     try:
-        link_elements = await page.query_selector_all(".profileLink")
+        social_links = {}
         
+        link_elements = await page.query_selector_all(".socialLinks a")
         for link_elem in link_elements:
             try:
-                # Extract platform from icon
-                icon_elem = await link_elem.query_selector(".logo i")
-                url_elem = await link_elem.query_selector("a")
+                platform = await link_elem.get_attribute("title")
+                url = await link_elem.get_attribute("href")
                 
-                if icon_elem and url_elem:
-                    class_attr = await icon_elem.get_attribute("class")
-                    href = await url_elem.get_attribute("href")
+                if platform and url:
+                    social_links[platform.strip().lower()] = url.strip()
                     
-                    if class_attr and href:
-                        # Extract platform name from class (e.g., "fa fa-twitter" -> "twitter")
-                        classes = class_attr.split()
-                        for cls in classes:
-                            if cls.startswith("fa-") and cls != "fa-fw":
-                                platform = cls.replace("fa-", "")
-                                socials[platform] = href
-                                break
             except Exception:
                 continue
+        
+        return social_links
+        
     except Exception as e:
         print(f"Error extracting social links: {str(e)}")
-    
-    return socials
+        return {}
 
 
 async def get_user_profile(username: str) -> UserProfile:
-    """Get user profile using Playwright"""
+    """Get complete user profile information"""
     url = f"{BASE_URL}/user/{username}/"
     
     try:
@@ -883,12 +841,10 @@ async def get_user_profile(username: str) -> UserProfile:
         try:
             await page.goto(url, timeout=PLAYWRIGHT_TIMEOUT, wait_until="domcontentloaded")
             
-            # Check if user exists
-            profile_elem = await page.query_selector(".profileHeadLeft")
-            if not profile_elem:
-                raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+            # Wait for user profile to load
+            await page.wait_for_selector(".userProfile", timeout=PLAYWRIGHT_TIMEOUT)
             
-            # Create tasks for extracting different parts of the profile
+            # Run extraction tasks concurrently
             basic_info_task = asyncio.create_task(extract_user_profile_info(page))
             stats_task = asyncio.create_task(extract_user_stats(page))
             distribution_task = asyncio.create_task(extract_rating_distribution(page))
@@ -915,6 +871,7 @@ async def get_user_profile(username: str) -> UserProfile:
                 recent_reviews=reviews,
                 social_links=social_links,
             )
+            
         finally:
             await page.close()
             
@@ -928,81 +885,15 @@ async def get_user_profile(username: str) -> UserProfile:
         )
 
 
-async def extract_favorite_albums(page: Page) -> List[Dict[str, str]]:
-    """Extract favorite albums using Playwright"""
-    favorites = []
+async def close_browser():
+    """Close the shared browser instance"""
+    global _browser, _browser_context
     
-    try:
-        album_blocks = await page.query_selector_all("#favAlbumsBlock .albumBlock")
+    if _browser_context:
+        await _browser_context.close()
+        _browser_context = None
         
-        for block in album_blocks:
-            try:
-                # Extract album title and artist
-                title_elem = await block.query_selector(".albumTitle")
-                artist_elem = await block.query_selector(".artistTitle")
-                
-                if title_elem and artist_elem:
-                    title = await title_elem.text_content()
-                    artist = await artist_elem.text_content()
-                    
-                    # Extract cover image if available
-                    cover_image = None
-                    img_elem = await block.query_selector(".image img")
-                    if img_elem:
-                        cover_image = await img_elem.get_attribute("src")
-                    
-                    # Extract album URL
-                    url = None
-                    link_elem = await block.query_selector(".image a")
-                    if link_elem:
-                        href = await link_elem.get_attribute("href")
-                        url = f"{BASE_URL}{href}" if href else None
-                    
-                    favorites.append({
-                        "title": title.strip(),
-                        "artist": artist.strip(),
-                        "cover_image": cover_image,
-                        "url": url
-                    })
-            except Exception as e:
-                print(f"Error extracting favorite album: {str(e)}")
-                continue
-    except Exception as e:
-        print(f"Error extracting favorite albums: {str(e)}")
-    
-    return favorites
-
-
-async def extract_social_links(page: Page) -> Dict[str, str]:
-    """Extract social media links using Playwright"""
-    socials = {}
-    
-    try:
-        link_elements = await page.query_selector_all(".profileLink")
-        
-        for link_elem in link_elements:
-            try:
-                # Extract platform from icon
-                icon_elem = await link_elem.query_selector(".logo i")
-                url_elem = await link_elem.query_selector("a")
-                
-                if icon_elem and url_elem:
-                    class_attr = await icon_elem.get_attribute("class")
-                    href = await url_elem.get_attribute("href")
-                    
-                    if class_attr and href:
-                        # Extract platform name from class (e.g., "fa fa-twitter" -> "twitter")
-                        classes = class_attr.split()
-                        for cls in classes:
-                            if cls.startswith("fa-") and cls != "fa-fw":
-                                platform = cls.replace("fa-", "")
-                                socials[platform] = href
-                                break
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"Error extracting social links: {str(e)}")
-    
-    return socials
-
+    if _browser:
+        await _browser.close()
+        _browser = None
 
